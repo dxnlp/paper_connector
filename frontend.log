@@ -1,0 +1,39 @@
+ INFO  Accepting connections at http://localhost:5173
+ HTTP  1/22/2026 10:26:11 PM ::1 GET /
+ HTTP  1/22/2026 10:26:11 PM ::1 Returned 200 in 9 ms
+ HTTP  1/22/2026 10:30:32 PM ::1 GET /
+ HTTP  1/22/2026 10:30:32 PM ::1 Returned 200 in 2 ms
+ HTTP  1/22/2026 10:30:32 PM ::1 GET /assets/index-DGNiz2mc.js
+ HTTP  1/22/2026 10:30:32 PM ::1 GET /assets/index-C6oJXgU4.css
+ HTTP  1/22/2026 10:30:32 PM ::1 Returned 304 in 4 ms
+ HTTP  1/22/2026 10:30:32 PM ::1 Returned 200 in 9 ms
+ HTTP  1/22/2026 10:30:32 PM ::1 GET /vite.svg
+ HTTP  1/22/2026 10:30:32 PM ::1 Returned 304 in 2 ms
+ HTTP  1/22/2026 10:30:44 PM ::1 GET /
+ HTTP  1/22/2026 10:30:44 PM ::1 Returned 304 in 4 ms
+ HTTP  1/22/2026 10:30:44 PM ::1 GET /assets/index-DGNiz2mc.js
+ HTTP  1/22/2026 10:30:44 PM ::1 GET /assets/index-C6oJXgU4.css
+ HTTP  1/22/2026 10:30:44 PM ::1 Returned 304 in 2 ms
+ HTTP  1/22/2026 10:30:44 PM ::1 Returned 304 in 1 ms
+ HTTP  1/22/2026 10:30:44 PM ::1 GET /vite.svg
+ HTTP  1/22/2026 10:30:44 PM ::1 Returned 304 in 2 ms
+ HTTP  1/22/2026 10:30:44 PM ::1 GET /
+ HTTP  1/22/2026 10:30:44 PM ::1 Returned 304 in 2 ms
+ HTTP  1/22/2026 10:30:45 PM ::1 GET /assets/index-DGNiz2mc.js
+ HTTP  1/22/2026 10:30:45 PM ::1 GET /assets/index-C6oJXgU4.css
+ HTTP  1/22/2026 10:30:45 PM ::1 Returned 304 in 1 ms
+ HTTP  1/22/2026 10:30:45 PM ::1 Returned 304 in 1 ms
+ HTTP  1/22/2026 10:30:45 PM ::1 GET /vite.svg
+ HTTP  1/22/2026 10:30:45 PM ::1 Returned 304 in 1 ms
+ HTTP  1/22/2026 10:31:29 PM ::1 GET /
+ HTTP  1/22/2026 10:31:29 PM ::1 Returned 304 in 2 ms
+ HTTP  1/22/2026 10:31:29 PM ::1 GET /assets/index-DGNiz2mc.js
+ HTTP  1/22/2026 10:31:29 PM ::1 GET /assets/index-C6oJXgU4.css
+ HTTP  1/22/2026 10:31:29 PM ::1 Returned 304 in 3 ms
+ HTTP  1/22/2026 10:31:29 PM ::1 Returned 304 in 2 ms
+ HTTP  1/22/2026 10:31:42 PM ::1 GET /
+ HTTP  1/22/2026 10:31:42 PM ::1 Returned 304 in 2 ms
+ HTTP  1/22/2026 10:31:42 PM ::1 GET /assets/index-DGNiz2mc.js
+ HTTP  1/22/2026 10:31:42 PM ::1 GET /assets/index-C6oJXgU4.css
+ HTTP  1/22/2026 10:31:42 PM ::1 Returned 304 in 3 ms
+ HTTP  1/22/2026 10:31:42 PM ::1 Returned 304 in 2 ms

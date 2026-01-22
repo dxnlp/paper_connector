@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+:root {
+  --hf-yellow: #FFD21E;
+  --hf-orange: #FF9D00;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+  min-height: 100vh;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a5568;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #718096;
+}
+
+/* Embla carousel custom styles */
+.embla {
+  overflow: hidden;
+}
+
+.embla__container {
+  display: flex;
+  gap: 1rem;
+}
+
+.embla__slide {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* Glassmorphism card effect */
+.glass-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Tag chip styles */
+.tag-chip {
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.tag-chip:hover {
+  transform: scale(1.05);
+}
+
+/* Cluster card hover effect */
+.cluster-card {
+  transition: all 0.3s;
+}
+
+.cluster-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+}
+
+/* Paper card styles */
+.paper-card {
+  transition: all 0.2s;
+}
+
+.paper-card:hover {
+  transform: scale(1.02);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #FFD21E 0%, #FF9D00 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* HF Yellow color utilities */
+.bg-hf-yellow {
+  background-color: #FFD21E;
+}
+
+.text-hf-yellow {
+  color: #FFD21E;
+}
+
+.bg-hf-orange {
+  background-color: #FF9D00;
+}
+
+.text-hf-orange {
+  color: #FF9D00;
+}
+
+.border-hf-yellow {
+  border-color: #FFD21E;
+}
+
+.ring-hf-yellow\/50 {
+  --tw-ring-color: rgba(255, 210, 30, 0.5);
+}
+
+.focus\:ring-hf-yellow\/50:focus {
+  --tw-ring-color: rgba(255, 210, 30, 0.5);
+}
+
+.hover\:bg-hf-orange:hover {
+  background-color: #FF9D00;
+}
+
+.hover\:border-hf-yellow\/30:hover {
+  border-color: rgba(255, 210, 30, 0.3);
+}
+
+/* Animation keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-slide-in {
+  animation: slideIn 0.4s ease-out forwards;
+}
+
+/* Line clamp utilities */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-4 {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
