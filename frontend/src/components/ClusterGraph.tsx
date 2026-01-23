@@ -123,18 +123,31 @@ export function ClusterGraph({
     return Math.max(...graphData.links.map((l) => l.sharedCount), 1);
   }, [graphData]);
 
-  // Handle container resize
+  // Handle container resize (including fullscreen changes)
   useEffect(() => {
     const handleResize = () => {
       if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setDimensions({ width: rect.width, height: rect.height });
+        // Use setTimeout to ensure DOM has updated after fullscreen change
+        setTimeout(() => {
+          if (containerRef.current) {
+            const rect = containerRef.current.getBoundingClientRect();
+            setDimensions({ width: rect.width, height: rect.height });
+            // Re-center the graph after resize
+            if (fgRef.current) {
+              fgRef.current.zoomToFit(300, 50);
+            }
+          }
+        }, 100);
       }
     };
 
     handleResize();
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    document.addEventListener('fullscreenchange', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      document.removeEventListener('fullscreenchange', handleResize);
+    };
   }, []);
 
   // Node size based on paper count with hover/selection scaling
