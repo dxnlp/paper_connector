@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Search, Calendar, RefreshCw, X, Grid3X3, GitBranch } from 'lucide-react';
-import type { MonthSummary, ClusterInfo, PaperCard as PaperCardType, ClusterGraphData, ClusterNode } from './api';
+import { Search, Calendar, RefreshCw, X, Grid3X3, GitBranch, TrendingUp } from 'lucide-react';
+import type { MonthSummary, ClusterInfo, PaperCard as PaperCardType, ClusterGraphData, ClusterNode, FlowData } from './api';
 import {
   fetchMonthSummary,
   fetchMonthPapers,
@@ -8,12 +8,15 @@ import {
   fetchClusterGraph,
   triggerReindex,
   fetchIndexStatus,
+  fetchFlowData,
 } from './api';
 import ClusterCard from './components/ClusterCard';
 import ClusterView from './components/ClusterView';
 import PaperModal from './components/PaperModal';
 import PaperCarousel from './components/PaperCarousel';
 import ClusterGraph from './components/ClusterGraph';
+import FlowVisualization from './components/FlowVisualization';
+import EmergingTopics from './components/EmergingTopics';
 
 // Generate recent months
 function getRecentMonths(count: number = 12): string[] {
@@ -26,7 +29,7 @@ function getRecentMonths(count: number = 12): string[] {
   return months;
 }
 
-type ViewMode = 'grid' | 'graph';
+type ViewMode = 'grid' | 'graph' | 'flow';
 
 function App() {
   // State
@@ -45,6 +48,9 @@ function App() {
 
   // Graph data
   const [graphData, setGraphData] = useState<ClusterGraphData | null>(null);
+
+  // Flow data (temporal visualization)
+  const [flowData, setFlowData] = useState<FlowData | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -71,15 +77,23 @@ function App() {
     setIsLoading(true);
     setError(null);
     try {
-      const [summaryData, papersData, graphDataResult] = await Promise.all([
+      // Calculate date range for flow data (entire selected month)
+      const [year, month] = selectedMonth.split('-').map(Number);
+      const startDate = `${selectedMonth}-01`;
+      const lastDay = new Date(year, month, 0).getDate();
+      const endDate = `${selectedMonth}-${String(lastDay).padStart(2, '0')}`;
+
+      const [summaryData, papersData, graphDataResult, flowDataResult] = await Promise.all([
         fetchMonthSummary(selectedMonth),
         fetchMonthPapers(selectedMonth, { sortBy, limit: 200 }),
         fetchClusterGraph(selectedMonth),
+        fetchFlowData(startDate, endDate).catch(() => null), // Flow data is optional
       ]);
       setSummary(summaryData);
       setAllPapers(papersData);
       setFilteredPapers(papersData);
       setGraphData(graphDataResult);
+      setFlowData(flowDataResult);
     } catch (err) {
       console.error('Failed to load data:', err);
       setError('Failed to load papers. Make sure the backend is running and papers are indexed.');
@@ -87,6 +101,7 @@ function App() {
       setAllPapers([]);
       setFilteredPapers([]);
       setGraphData(null);
+      setFlowData(null);
     } finally {
       setIsLoading(false);
     }
@@ -204,9 +219,20 @@ function App() {
                       ? 'bg-hf-yellow text-black'
                       : 'text-gray-400 hover:text-white'
                   }`}
-                  title="Graph View"
+                  title="Cluster Network"
                 >
                   <GitBranch size={16} />
+                </button>
+                <button
+                  onClick={() => setViewMode('flow')}
+                  className={`p-2 rounded-md transition-colors ${
+                    viewMode === 'flow'
+                      ? 'bg-hf-yellow text-black'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                  title="Flow View (Timeline)"
+                >
+                  <TrendingUp size={16} />
                 </button>
                 <button
                   onClick={() => setViewMode('grid')}
@@ -343,6 +369,59 @@ function App() {
                     onNodeClick={handleGraphNodeClick}
                     selectedNodeId={selectedCluster?.clusterId}
                   />
+                </div>
+              </div>
+            )}
+
+            {/* Flow View */}
+            {!searchQuery && viewMode === 'flow' && (
+              <div className="mb-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Flow visualization - takes 2/3 */}
+                  <div className="lg:col-span-2">
+                    <h3 className="text-lg font-semibold mb-4">Research Trends Over Time</h3>
+                    {flowData && flowData.daily_data.length > 0 ? (
+                      <div className="rounded-xl overflow-hidden border border-gray-800">
+                        <FlowVisualization
+                          flowData={flowData}
+                          height={500}
+                          onClusterClick={(cluster, _date) => {
+                            // Find matching cluster info and show it
+                            const clusterInfo = summary?.clusters.find(
+                              c => c.name === cluster
+                            );
+                            if (clusterInfo) {
+                              handleClusterClick(clusterInfo);
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="h-[500px] rounded-xl border border-gray-800 bg-[#0a0a1a] flex items-center justify-center">
+                        <div className="text-center">
+                          <TrendingUp size={48} className="mx-auto mb-4 text-gray-600" />
+                          <p className="text-gray-400">No temporal data available yet</p>
+                          <p className="text-sm text-gray-500 mt-2">
+                            Daily paper tracking will populate this view over time
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Emerging topics sidebar - takes 1/3 */}
+                  <div>
+                    <EmergingTopics
+                      onClusterClick={(clusterName) => {
+                        const clusterInfo = summary?.clusters.find(
+                          c => c.name === clusterName
+                        );
+                        if (clusterInfo) {
+                          handleClusterClick(clusterInfo);
+                        }
+                      }}
+                    />
+                  </div>
                 </div>
               </div>
             )}

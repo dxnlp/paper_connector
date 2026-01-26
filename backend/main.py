@@ -31,12 +31,20 @@ from aggregation import (
     compute_trend_data, save_daily_snapshot_for_date,
     DailyStats, WeeklyStats, FlowData, TrendData
 )
+from scheduler import get_scheduler, PaperScheduler
 from llm_tagger import (
     generate_taxonomy, tag_paper, tag_all_papers, tag_paper_heuristic,
     DEFAULT_CONTRIBUTION_TAGS, DEFAULT_TASK_TAGS, DEFAULT_MODALITY_TAGS
 )
 from llm import list_available_providers, get_config, LLMError, ProviderName
 from taxonomy import get_taxonomy_with_colors, get_category_color
+from emerging import (
+    generate_emerging_topics_report,
+    detect_new_clusters,
+    detect_upvote_surges,
+    compute_trend_signals,
+    EmergingTopicsReport,
+)
 
 
 # Lifespan context manager for startup/shutdown
@@ -937,6 +945,173 @@ async def run_daily_indexing(date: str, use_llm: bool, provider: Optional[str] =
     except Exception as e:
         indexing_status[task_key]["status"] = "failed"
         indexing_status[task_key]["message"] = str(e)
+
+
+# ============= Scheduler Endpoints =============
+
+@app.get("/api/scheduler/status")
+async def get_scheduler_status():
+    """Get the current status of the paper scraping scheduler."""
+    scheduler = get_scheduler()
+    return scheduler.get_status()
+
+
+@app.post("/api/scheduler/start")
+async def start_scheduler(
+    run_now: bool = False,
+    backfill: bool = True
+):
+    """
+    Start the paper scraping scheduler.
+
+    Args:
+        run_now: If True, run an immediate scrape for today
+        backfill: If True, backfill missed days on startup
+    """
+    scheduler = get_scheduler()
+
+    if scheduler.is_running:
+        return {"status": "already_running", "message": "Scheduler is already running"}
+
+    scheduler.start(run_now=run_now, backfill=backfill)
+
+    return {
+        "status": "started",
+        "message": "Scheduler started successfully",
+        "config": scheduler.get_status()["config"]
+    }
+
+
+@app.post("/api/scheduler/stop")
+async def stop_scheduler():
+    """Stop the paper scraping scheduler."""
+    scheduler = get_scheduler()
+
+    if not scheduler.is_running:
+        return {"status": "not_running", "message": "Scheduler is not running"}
+
+    scheduler.stop()
+
+    return {"status": "stopped", "message": "Scheduler stopped successfully"}
+
+
+@app.post("/api/scheduler/backfill")
+async def trigger_backfill(days: int = Query(7, ge=1, le=30)):
+    """
+    Trigger a backfill of missed days.
+
+    Args:
+        days: Number of days to look back (1-30)
+    """
+    scheduler = get_scheduler()
+    results = await scheduler.backfill_missed_days(days)
+
+    return {
+        "status": "completed",
+        "days_checked": days,
+        "days_backfilled": len(results),
+        "results": results
+    }
+
+
+# ============= Emerging Topics Endpoints =============
+
+@app.get("/api/emerging/report")
+async def get_emerging_topics_report(
+    end_date: Optional[str] = Query(None, description="Analysis end date (defaults to today)"),
+    lookback_days: int = Query(14, ge=7, le=30, description="Days to analyze"),
+    comparison_days: int = Query(30, ge=14, le=60, description="Days for comparison period")
+):
+    """
+    Generate a comprehensive emerging topics report.
+
+    Analyzes recent papers to detect:
+    - New research clusters appearing
+    - Rapid growth in existing areas
+    - Upvote surges indicating community interest
+    - Emerging keywords and phrases
+
+    Args:
+        end_date: End date for analysis (YYYY-MM-DD, defaults to today)
+        lookback_days: Number of days to analyze (current period)
+        comparison_days: Number of days for comparison (previous period)
+    """
+    report = await generate_emerging_topics_report(
+        end_date=end_date,
+        lookback_days=lookback_days,
+        comparison_lookback_days=comparison_days
+    )
+    return report
+
+
+@app.get("/api/emerging/trends")
+async def get_emerging_trends(
+    end_date: Optional[str] = Query(None, description="Analysis end date"),
+    limit: int = Query(15, ge=5, le=30)
+):
+    """
+    Get trend signals for all clusters.
+
+    Returns clusters sorted by signal strength (rising/falling trends).
+    """
+    from datetime import date as date_type
+    if not end_date:
+        end_date = date_type.today().strftime("%Y-%m-%d")
+
+    signals = await compute_trend_signals(end_date)
+    return {
+        "end_date": end_date,
+        "trends": signals[:limit]
+    }
+
+
+@app.get("/api/emerging/rising")
+async def get_rising_topics(
+    end_date: Optional[str] = Query(None, description="Analysis end date"),
+    min_growth: float = Query(20.0, description="Minimum weekly growth percentage")
+):
+    """
+    Get topics that are rising in popularity.
+
+    Filters trend signals to show only clusters with positive growth
+    above the specified threshold.
+    """
+    from datetime import date as date_type
+    if not end_date:
+        end_date = date_type.today().strftime("%Y-%m-%d")
+
+    signals = await compute_trend_signals(end_date)
+
+    rising = [
+        s for s in signals
+        if s.trend_direction == "rising" and s.weekly_change >= min_growth
+    ]
+
+    return {
+        "end_date": end_date,
+        "min_growth": min_growth,
+        "rising_topics": rising
+    }
+
+
+@app.get("/api/emerging/hot")
+async def get_hot_topics(
+    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date YYYY-MM-DD"),
+    min_papers: int = Query(3, ge=1)
+):
+    """
+    Get hot topics based on upvote activity.
+
+    Returns clusters where papers are receiving above-average attention.
+    """
+    surges = await detect_upvote_surges(start_date, end_date, min_papers=min_papers)
+
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "hot_topics": surges
+    }
 
 
 if __name__ == "__main__":

@@ -91,6 +91,44 @@ export interface ClusterGraphData {
   links: ClusterLink[];
 }
 
+// Flow visualization types
+export interface FlowData {
+  start_date: string;
+  end_date: string;
+  clusters: string[];
+  colors: Record<string, string>;
+  daily_data: Array<{
+    date: string;
+    cluster_counts: Record<string, number>;
+  }>;
+}
+
+export interface TrendData {
+  cluster_name: string;
+  color: string;
+  data_points: Array<{
+    date: string;
+    count: number;
+    cumulative: number;
+  }>;
+}
+
+export interface DailyStats {
+  date: string;
+  total_papers: number;
+  new_papers: number;
+  clusters: Array<{
+    name: string;
+    color: string;
+    paper_count: number;
+    top_papers: string[];
+    avg_upvotes: number;
+    total_upvotes: number;
+  }>;
+  top_papers: string[];
+  total_upvotes: number;
+}
+
 // API base URL - adjust for production
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -175,5 +213,121 @@ export async function triggerReindex(month: string, useLlm: boolean = false): Pr
 export async function fetchIndexStatus(month: string): Promise<IndexStatus> {
   const res = await fetch(`${API_BASE}/api/reindex/status/${month}`);
   if (!res.ok) throw new Error('Failed to fetch index status');
+  return res.json();
+}
+
+// Flow visualization API functions
+export async function fetchFlowData(startDate: string, endDate: string): Promise<FlowData> {
+  const res = await fetch(`${API_BASE}/api/flow?start_date=${startDate}&end_date=${endDate}`);
+  if (!res.ok) throw new Error('Failed to fetch flow data');
+  return res.json();
+}
+
+export async function fetchDailyStats(date: string): Promise<DailyStats> {
+  const res = await fetch(`${API_BASE}/api/daily/${date}/stats`);
+  if (!res.ok) throw new Error('Failed to fetch daily stats');
+  return res.json();
+}
+
+export async function fetchTrendData(clusterName: string, startDate: string, endDate: string): Promise<TrendData> {
+  const res = await fetch(`${API_BASE}/api/trends/${encodeURIComponent(clusterName)}?start_date=${startDate}&end_date=${endDate}`);
+  if (!res.ok) throw new Error('Failed to fetch trend data');
+  return res.json();
+}
+
+export async function fetchCuratedTaxonomy(): Promise<{
+  contribution: Array<{ id: string; name: string; color: string; description: string }>;
+  task: Array<{ id: string; name: string; color: string; description: string }>;
+  modality: Array<{ id: string; name: string; color: string; description: string }>;
+}> {
+  const res = await fetch(`${API_BASE}/api/taxonomy/curated`);
+  if (!res.ok) throw new Error('Failed to fetch curated taxonomy');
+  return res.json();
+}
+
+// Emerging topics types
+export interface EmergingTopic {
+  name: string;
+  signal_type: 'new_cluster' | 'rapid_growth' | 'upvote_surge' | 'keyword_emergence';
+  confidence: number;
+  evidence: string;
+  first_seen: string | null;
+  growth_rate: number | null;
+  related_clusters: string[];
+  sample_paper_ids: string[];
+}
+
+export interface TrendSignal {
+  cluster_name: string;
+  signal_strength: number;
+  trend_direction: 'rising' | 'falling' | 'stable';
+  weekly_change: number;
+  monthly_change: number;
+  current_count: number;
+  previous_count: number;
+}
+
+export interface EmergingTopicsReport {
+  generated_at: string;
+  analysis_period: string;
+  emerging_topics: EmergingTopic[];
+  trend_signals: TrendSignal[];
+  summary: string;
+}
+
+// Emerging topics API functions
+export async function fetchEmergingReport(
+  endDate?: string,
+  lookbackDays: number = 14,
+  comparisonDays: number = 30
+): Promise<EmergingTopicsReport> {
+  const params = new URLSearchParams();
+  if (endDate) params.set('end_date', endDate);
+  params.set('lookback_days', lookbackDays.toString());
+  params.set('comparison_days', comparisonDays.toString());
+
+  const res = await fetch(`${API_BASE}/api/emerging/report?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch emerging report');
+  return res.json();
+}
+
+export async function fetchEmergingTrends(
+  endDate?: string,
+  limit: number = 15
+): Promise<{ end_date: string; trends: TrendSignal[] }> {
+  const params = new URLSearchParams();
+  if (endDate) params.set('end_date', endDate);
+  params.set('limit', limit.toString());
+
+  const res = await fetch(`${API_BASE}/api/emerging/trends?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch emerging trends');
+  return res.json();
+}
+
+export async function fetchRisingTopics(
+  endDate?: string,
+  minGrowth: number = 20
+): Promise<{ end_date: string; rising_topics: TrendSignal[] }> {
+  const params = new URLSearchParams();
+  if (endDate) params.set('end_date', endDate);
+  params.set('min_growth', minGrowth.toString());
+
+  const res = await fetch(`${API_BASE}/api/emerging/rising?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch rising topics');
+  return res.json();
+}
+
+export async function fetchHotTopics(
+  startDate: string,
+  endDate: string,
+  minPapers: number = 3
+): Promise<{ hot_topics: EmergingTopic[] }> {
+  const params = new URLSearchParams();
+  params.set('start_date', startDate);
+  params.set('end_date', endDate);
+  params.set('min_papers', minPapers.toString());
+
+  const res = await fetch(`${API_BASE}/api/emerging/hot?${params}`);
+  if (!res.ok) throw new Error('Failed to fetch hot topics');
   return res.json();
 }
