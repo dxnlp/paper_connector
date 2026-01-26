@@ -28,6 +28,7 @@ from llm_tagger import (
     generate_taxonomy, tag_paper, tag_all_papers, tag_paper_heuristic,
     DEFAULT_CONTRIBUTION_TAGS, DEFAULT_TASK_TAGS, DEFAULT_MODALITY_TAGS
 )
+from llm import list_available_providers, get_config, LLMError, ProviderName
 
 
 # Lifespan context manager for startup/shutdown
@@ -537,11 +538,22 @@ indexing_status = {}
 
 
 @app.post("/api/reindex/month/{month}", response_model=IndexStatus)
-async def reindex_month(month: str, background_tasks: BackgroundTasks, use_llm: bool = False):
+async def reindex_month(
+    month: str,
+    background_tasks: BackgroundTasks,
+    use_llm: bool = False,
+    provider: Optional[str] = Query(
+        None,
+        description="LLM provider to use (minimax, openai, anthropic). Uses default if not specified."
+    )
+):
     """
     Trigger re-indexing of a month's papers.
-    
+
     This runs in the background. Poll /api/reindex/status/{month} for progress.
+
+    - **use_llm**: If True, uses LLM for taxonomy generation and tagging. Otherwise uses heuristics.
+    - **provider**: LLM provider to use (minimax, openai, anthropic). Only used if use_llm=True.
     """
     if month in indexing_status and indexing_status[month]["status"] == "running":
         return IndexStatus(
@@ -549,42 +561,42 @@ async def reindex_month(month: str, background_tasks: BackgroundTasks, use_llm: 
             month=month,
             message="Indexing already in progress for this month"
         )
-    
+
     indexing_status[month] = {
         "status": "running",
         "papers_scraped": 0,
         "papers_tagged": 0,
         "message": "Starting..."
     }
-    
-    background_tasks.add_task(run_indexing, month, use_llm)
-    
+
+    background_tasks.add_task(run_indexing, month, use_llm, provider)
+
     return IndexStatus(
         status="started",
         month=month,
-        message="Indexing started in background"
+        message=f"Indexing started in background" + (f" with {provider} provider" if provider else "")
     )
 
 
-async def run_indexing(month: str, use_llm: bool):
+async def run_indexing(month: str, use_llm: bool, provider: Optional[str] = None):
     """Background task to run the full indexing pipeline."""
     try:
         # Step 1: Scrape papers
         indexing_status[month]["message"] = "Scraping papers..."
         papers = await scrape_month(month)
         indexing_status[month]["papers_scraped"] = len(papers)
-        
+
         # Save papers to database
         for paper in papers:
             await upsert_paper(paper)
-        
+
         indexing_status[month]["message"] = f"Scraped {len(papers)} papers. Generating taxonomy..."
-        
+
         # Step 2: Generate/get taxonomy
         taxonomy = await get_taxonomy(month)
         if not taxonomy:
             if use_llm:
-                taxonomy = await generate_taxonomy(papers, month)
+                taxonomy = await generate_taxonomy(papers, month, provider=provider)
             else:
                 taxonomy = Taxonomy(
                     month=month,
@@ -594,22 +606,25 @@ async def run_indexing(month: str, use_llm: bool):
                     definitions={}
                 )
             await save_taxonomy(taxonomy)
-        
+
         indexing_status[month]["message"] = "Tagging papers..."
-        
+
         # Step 3: Tag papers
         for i, paper in enumerate(papers):
             if use_llm:
-                tags = await tag_paper(paper, taxonomy)
+                tags = await tag_paper(paper, taxonomy, provider=provider)
             else:
                 tags = tag_paper_heuristic(paper, taxonomy)
-            
+
             await save_paper_tags(tags)
             indexing_status[month]["papers_tagged"] = i + 1
-        
+
         indexing_status[month]["status"] = "completed"
         indexing_status[month]["message"] = f"Successfully indexed {len(papers)} papers"
-        
+
+    except LLMError as e:
+        indexing_status[month]["status"] = "failed"
+        indexing_status[month]["message"] = f"LLM Error: {e}"
     except Exception as e:
         indexing_status[month]["status"] = "failed"
         indexing_status[month]["message"] = str(e)
@@ -643,10 +658,10 @@ async def get_available_months():
     # In a production system, you'd query the database
     # For now, return a static list of recent months
     import datetime
-    
+
     current = datetime.date.today()
     months = []
-    
+
     for i in range(12):
         year = current.year
         month = current.month - i
@@ -654,8 +669,44 @@ async def get_available_months():
             month += 12
             year -= 1
         months.append(f"{year}-{month:02d}")
-    
+
     return {"months": months}
+
+
+# ============= LLM Provider Endpoints =============
+
+@app.get("/api/llm/providers")
+async def get_llm_providers():
+    """
+    Get list of available LLM providers.
+
+    Returns the list of configured providers and the default provider.
+    A provider is available if its API key is configured in the environment.
+    """
+    config = get_config()
+    available = list_available_providers()
+
+    return {
+        "available": available,
+        "default": config.default_provider,
+        "providers": {
+            "minimax": {
+                "name": "MiniMax",
+                "available": "minimax" in available,
+                "model": config.minimax_model
+            },
+            "openai": {
+                "name": "OpenAI",
+                "available": "openai" in available,
+                "model": config.openai_model
+            },
+            "anthropic": {
+                "name": "Anthropic Claude",
+                "available": "anthropic" in available,
+                "model": config.anthropic_model
+            }
+        }
+    }
 
 
 if __name__ == "__main__":

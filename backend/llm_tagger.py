@@ -1,18 +1,14 @@
 """
 LLM integration for taxonomy generation and paper tagging.
-Uses MiniMax model via API for structured outputs.
+Supports multiple LLM providers via the llm module.
 """
 
-import httpx
 import json
 import re
-import os
 from typing import Optional
-from database import Paper, Taxonomy, PaperTags
 
-# MiniMax API configuration
-MINIMAX_API_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2"
-MINIMAX_MODEL = "abab6.5s-chat"
+from database import Paper, Taxonomy, PaperTags
+from llm import get_provider, LLMError, ProviderName
 
 # Default taxonomy if LLM call fails
 DEFAULT_CONTRIBUTION_TAGS = [
@@ -70,56 +66,77 @@ DEFAULT_MODALITY_TAGS = [
 ]
 
 
-async def call_minimax_llm(system_prompt: str, user_prompt: str, api_key: Optional[str] = None) -> str:
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    provider: Optional[ProviderName] = None,
+    api_key: Optional[str] = None,
+    **kwargs
+) -> str:
+    """
+    Call the configured LLM provider.
+
+    Args:
+        system_prompt: System message for the LLM
+        user_prompt: User message/query
+        provider: Optional provider name override (minimax, openai, anthropic)
+        api_key: Optional API key override
+        **kwargs: Provider-specific options (e.g., model, temperature)
+
+    Returns:
+        LLM response text
+
+    Raises:
+        LLMError: On API or configuration errors
+    """
+    llm = get_provider(provider)
+    response = await llm.complete(
+        system_prompt,
+        user_prompt,
+        api_key=api_key,
+        **kwargs
+    )
+    return response.content
+
+
+async def call_minimax_llm(
+    system_prompt: str,
+    user_prompt: str,
+    api_key: Optional[str] = None
+) -> str:
     """
     Call MiniMax LLM API.
-    
+
+    This is a backward-compatible wrapper around call_llm().
+    Prefer using call_llm() directly for new code.
+
     Args:
         system_prompt: System message for the LLM
         user_prompt: User message/query
         api_key: Optional API key (defaults to env var)
-    
+
     Returns:
         LLM response text
     """
-    api_key = api_key or os.environ.get("MINIMAX_API_KEY", "")
-    
-    if not api_key:
-        raise ValueError("MINIMAX_API_KEY not set")
-    
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "model": MINIMAX_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "temperature": 0.3,
-        "max_tokens": 4096
-    }
-    
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(MINIMAX_API_URL, json=payload, headers=headers)
-        response.raise_for_status()
-        
-        result = response.json()
-        return result.get("choices", [{}])[0].get("message", {}).get("content", "")
+    return await call_llm(
+        system_prompt,
+        user_prompt,
+        provider="minimax",
+        api_key=api_key
+    )
 
 
 def extract_json_from_response(response: str) -> dict:
     """Extract JSON from LLM response, handling markdown code blocks."""
-    # Try to find JSON in code blocks
-    json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', response)
+    # Try to find JSON in code blocks (greedy match for nested objects)
+    json_match = re.search(r'```(?:json)?\s*(\{[\s\S]*\})\s*```', response)
     if json_match:
         try:
             return json.loads(json_match.group(1))
         except json.JSONDecodeError:
             pass
-    
+
     # Try to find raw JSON
     try:
         # Find the first { and last }
@@ -129,19 +146,25 @@ def extract_json_from_response(response: str) -> dict:
             return json.loads(response[start:end + 1])
     except json.JSONDecodeError:
         pass
-    
+
     return {}
 
 
-async def generate_taxonomy(papers: list[Paper], month: str, api_key: Optional[str] = None) -> Taxonomy:
+async def generate_taxonomy(
+    papers: list[Paper],
+    month: str,
+    api_key: Optional[str] = None,
+    provider: Optional[ProviderName] = None
+) -> Taxonomy:
     """
     Generate a taxonomy for the given papers using LLM.
-    
+
     Args:
         papers: List of papers to analyze
         month: Month string (e.g., "2025-01")
         api_key: Optional API key
-    
+        provider: Optional provider name (minimax, openai, anthropic)
+
     Returns:
         Taxonomy object with contribution, task, and modality tags
     """
@@ -169,7 +192,7 @@ Guidelines:
     for p in papers[:100]:  # Limit to avoid token limits
         summary = f"- {p.id}: {p.title}\n  Abstract: {p.abstract[:300]}..."
         paper_summaries.append(summary)
-    
+
     user_prompt = f"""Analyze the following {len(papers)} papers from {month} and propose a taxonomy:
 
 {chr(10).join(paper_summaries)}
@@ -177,9 +200,14 @@ Guidelines:
 Generate a comprehensive taxonomy JSON that can categorize all these papers effectively."""
 
     try:
-        response = await call_minimax_llm(system_prompt, user_prompt, api_key)
+        response = await call_llm(
+            system_prompt,
+            user_prompt,
+            provider=provider,
+            api_key=api_key
+        )
         taxonomy_data = extract_json_from_response(response)
-        
+
         if taxonomy_data:
             return Taxonomy(
                 month=month,
@@ -188,9 +216,11 @@ Generate a comprehensive taxonomy JSON that can categorize all these papers effe
                 modality_tags=taxonomy_data.get("modality_tags", DEFAULT_MODALITY_TAGS),
                 definitions=taxonomy_data.get("definitions", {})
             )
+    except LLMError as e:
+        print(f"LLM taxonomy generation failed: {e}")
     except Exception as e:
         print(f"LLM taxonomy generation failed: {e}")
-    
+
     # Return default taxonomy on failure
     return Taxonomy(
         month=month,
@@ -201,15 +231,21 @@ Generate a comprehensive taxonomy JSON that can categorize all these papers effe
     )
 
 
-async def tag_paper(paper: Paper, taxonomy: Taxonomy, api_key: Optional[str] = None) -> PaperTags:
+async def tag_paper(
+    paper: Paper,
+    taxonomy: Taxonomy,
+    api_key: Optional[str] = None,
+    provider: Optional[ProviderName] = None
+) -> PaperTags:
     """
     Tag a single paper using the provided taxonomy.
-    
+
     Args:
         paper: Paper to tag
         taxonomy: Taxonomy to use for tagging
         api_key: Optional API key
-    
+        provider: Optional provider name (minimax, openai, anthropic)
+
     Returns:
         PaperTags object with assigned tags
     """
@@ -248,26 +284,31 @@ Abstract: {paper.abstract}
 ArXiv ID: {paper.id}"""
 
     try:
-        response = await call_minimax_llm(system_prompt, user_prompt, api_key)
+        response = await call_llm(
+            system_prompt,
+            user_prompt,
+            provider=provider,
+            api_key=api_key
+        )
         tags_data = extract_json_from_response(response)
-        
+
         if tags_data:
             # Validate tags against taxonomy
             primary = tags_data.get("primary_contribution_tag", "OTHER")
             if primary not in taxonomy.contribution_tags:
                 primary = "OTHER"
-            
-            secondary = [t for t in tags_data.get("secondary_contribution_tags", []) 
+
+            secondary = [t for t in tags_data.get("secondary_contribution_tags", [])
                         if t in taxonomy.contribution_tags][:2]
-            
-            task = [t for t in tags_data.get("task_tags", []) 
+
+            task = [t for t in tags_data.get("task_tags", [])
                    if t in taxonomy.task_tags][:3]
-            
-            modality = [t for t in tags_data.get("modality_tags", ["text"]) 
+
+            modality = [t for t in tags_data.get("modality_tags", ["text"])
                        if t in taxonomy.modality_tags]
             if not modality:
                 modality = ["text"]
-            
+
             return PaperTags(
                 paper_id=paper.id,
                 month=taxonomy.month,
@@ -279,9 +320,11 @@ ArXiv ID: {paper.id}"""
                 confidence=float(tags_data.get("confidence", 0.5)),
                 rationale=tags_data.get("rationale", "")
             )
+    except LLMError as e:
+        print(f"LLM tagging failed for {paper.id}: {e}")
     except Exception as e:
         print(f"LLM tagging failed for {paper.id}: {e}")
-    
+
     # Return default tags on failure
     return PaperTags(
         paper_id=paper.id,
@@ -296,31 +339,36 @@ ArXiv ID: {paper.id}"""
     )
 
 
-async def tag_all_papers(papers: list[Paper], taxonomy: Taxonomy, 
-                         api_key: Optional[str] = None,
-                         progress_callback=None) -> list[PaperTags]:
+async def tag_all_papers(
+    papers: list[Paper],
+    taxonomy: Taxonomy,
+    api_key: Optional[str] = None,
+    provider: Optional[ProviderName] = None,
+    progress_callback=None
+) -> list[PaperTags]:
     """
     Tag all papers using the taxonomy.
-    
+
     Args:
         papers: List of papers to tag
         taxonomy: Taxonomy to use
         api_key: Optional API key
+        provider: Optional provider name (minimax, openai, anthropic)
         progress_callback: Optional callback(current, total, paper_id)
-    
+
     Returns:
         List of PaperTags objects
     """
     all_tags = []
-    
+
     for i, paper in enumerate(papers):
         if progress_callback:
             progress_callback(i + 1, len(papers), paper.id)
-        
+
         print(f"Tagging paper {i + 1}/{len(papers)}: {paper.id}")
-        tags = await tag_paper(paper, taxonomy, api_key)
+        tags = await tag_paper(paper, taxonomy, api_key=api_key, provider=provider)
         all_tags.append(tags)
-    
+
     return all_tags
 
 
@@ -330,10 +378,10 @@ def tag_paper_heuristic(paper: Paper, taxonomy: Taxonomy) -> PaperTags:
     title_lower = paper.title.lower()
     abstract_lower = paper.abstract.lower()
     combined = title_lower + " " + abstract_lower
-    
+
     # Determine primary contribution - more comprehensive matching
     primary = "Foundational Research"  # Default fallback instead of OTHER
-    
+
     if any(w in combined for w in ["benchmark", "evaluation", "assess", "leaderboard", "metric"]):
         primary = "Benchmark / Evaluation"
     elif any(w in combined for w in ["dataset", "corpus", "data curation", "annotation", "labeled data"]):
@@ -365,7 +413,7 @@ def tag_paper_heuristic(paper: Paper, taxonomy: Taxonomy) -> PaperTags:
     elif any(w in combined for w in ["medical", "clinical", "health", "drug", "disease", "patient", "diagnosis",
                                       "legal", "law", "finance", "financial", "education", "scientific"]):
         primary = "Application / Domain-Specific"
-    
+
     # Ensure primary is in taxonomy, use "Foundational Research" as final fallback
     if primary not in taxonomy.contribution_tags:
         if "Foundational Research" in taxonomy.contribution_tags:
@@ -374,7 +422,7 @@ def tag_paper_heuristic(paper: Paper, taxonomy: Taxonomy) -> PaperTags:
             primary = "Application / Domain-Specific"
         else:
             primary = taxonomy.contribution_tags[0] if taxonomy.contribution_tags else "Foundational Research"
-    
+
     # Determine task tags - more comprehensive
     task_tags = []
     task_keywords = {
@@ -395,13 +443,13 @@ def tag_paper_heuristic(paper: Paper, taxonomy: Taxonomy) -> PaperTags:
         "General NLP": ["nlp", "natural language", "text", "linguistic"],
         "Computer Vision": ["image", "visual", "object detection", "segmentation", "recognition"],
     }
-    
+
     for tag, keywords in task_keywords.items():
         if any(kw in combined for kw in keywords) and tag in taxonomy.task_tags:
             task_tags.append(tag)
             if len(task_tags) >= 3:
                 break
-    
+
     # If no task tags found, add a general one based on modality
     if not task_tags:
         if any(w in combined for w in ["image", "vision", "visual"]):
@@ -410,7 +458,7 @@ def tag_paper_heuristic(paper: Paper, taxonomy: Taxonomy) -> PaperTags:
         elif any(w in combined for w in ["text", "language", "nlp"]):
             if "General NLP" in taxonomy.task_tags:
                 task_tags.append("General NLP")
-    
+
     # Determine modality
     modality_tags = []
     if any(w in combined for w in ["video"]):
@@ -427,12 +475,12 @@ def tag_paper_heuristic(paper: Paper, taxonomy: Taxonomy) -> PaperTags:
         modality_tags.append("multimodal")
     if not modality_tags or any(w in combined for w in ["text", "language", "nlp", "document"]):
         modality_tags.append("text")
-    
+
     # Filter to only valid tags
     modality_tags = [t for t in modality_tags if t in taxonomy.modality_tags]
     if not modality_tags:
         modality_tags = ["text"]
-    
+
     return PaperTags(
         paper_id=paper.id,
         month=taxonomy.month,
