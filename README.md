@@ -18,7 +18,14 @@ hf-papers-explorer/
 │   ├── main.py        # API endpoints
 │   ├── database.py    # SQLite models & queries
 │   ├── scraper.py     # HF paper scraper
-│   └── llm_tagger.py  # LLM taxonomy & tagging
+│   ├── llm_tagger.py  # LLM taxonomy & tagging
+│   └── llm/           # Multi-provider LLM abstraction
+│       ├── base.py           # Provider protocol & models
+│       ├── config.py         # Configuration management
+│       └── providers/        # Provider implementations
+│           ├── minimax.py
+│           ├── openai.py
+│           └── anthropic.py
 ├── frontend/          # React + Vite frontend
 │   └── src/
 │       ├── App.tsx           # Main app component
@@ -83,6 +90,7 @@ npm run dev
 | `GET /api/papers/{id}` | Get paper details |
 | `POST /api/reindex/month/{month}` | Trigger paper indexing |
 | `GET /api/reindex/status/{month}` | Check indexing status |
+| `GET /api/llm/providers` | List available LLM providers |
 
 ## Tagging Taxonomy
 
@@ -110,15 +118,44 @@ npm run dev
 The app supports two tagging modes:
 
 1. **Heuristic tagging** (default): Fast keyword-based tagging
-2. **LLM tagging**: Uses MiniMax model for intelligent taxonomy generation and tagging
+2. **LLM tagging**: Uses AI for intelligent taxonomy generation and paper tagging
 
-To enable LLM tagging, set `MINIMAX_API_KEY` environment variable and use `?use_llm=true` when triggering reindex.
+### Supported Providers
+
+| Provider | Environment Variable | Model |
+|----------|---------------------|-------|
+| MiniMax | `MINIMAX_API_KEY` | abab6.5s-chat |
+| OpenAI | `OPENAI_API_KEY` | gpt-4o |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514 |
+
+### Configuration
+
+```bash
+# Set the default provider (optional, defaults to minimax)
+export LLM_PROVIDER=openai
+
+# Set API key for your chosen provider
+export OPENAI_API_KEY=your_key_here
+```
+
+### Usage
+
+```bash
+# Use default provider
+curl -X POST "http://localhost:8000/api/reindex/month/2025-01?use_llm=true"
+
+# Specify provider explicitly
+curl -X POST "http://localhost:8000/api/reindex/month/2025-01?use_llm=true&provider=anthropic"
+
+# Check available providers
+curl "http://localhost:8000/api/llm/providers"
+```
 
 ## Tech Stack
 
 - **Backend**: Python, FastAPI, SQLite, httpx, BeautifulSoup
 - **Frontend**: React, TypeScript, Vite, TailwindCSS, Embla Carousel
-- **LLM**: MiniMax API (optional)
+- **LLM**: MiniMax, OpenAI, or Anthropic Claude (configurable)
 
 ## License
 
