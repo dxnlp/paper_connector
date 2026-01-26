@@ -9,61 +9,20 @@ from typing import Optional
 
 from database import Paper, Taxonomy, PaperTags
 from llm import get_provider, LLMError, ProviderName
+from taxonomy import (
+    get_contribution_tags,
+    get_task_tags,
+    get_modality_tags,
+    find_best_match,
+    CONTRIBUTION_TAXONOMY,
+    TASK_TAXONOMY,
+    MODALITY_TAXONOMY,
+)
 
-# Default taxonomy if LLM call fails
-DEFAULT_CONTRIBUTION_TAGS = [
-    "Benchmark / Evaluation",
-    "Dataset / Data Curation",
-    "Architecture / Model Design",
-    "Training Recipe / Scaling / Distillation",
-    "Post-training / Alignment",
-    "Reasoning / Test-time Compute",
-    "Agents / Tool Use / Workflow",
-    "Multimodal Method",
-    "RAG / Retrieval / Memory",
-    "Safety / Robustness / Interpretability",
-    "Systems / Efficiency",
-    "Survey / Tutorial",
-    "Technical Report / Model Release",
-    "Theory / Analysis",
-    "Application / Domain-Specific",
-    "Foundational Research"
-]
-
-DEFAULT_TASK_TAGS = [
-    "RAG",
-    "Coding / SWE Agents",
-    "Video Reasoning",
-    "Long-context",
-    "Scientific Reasoning",
-    "Medical Imaging",
-    "Evaluation Frameworks",
-    "Alignment / Preference Learning",
-    "World Models / 3D / 4D",
-    "Multimodal Understanding",
-    "Language Understanding",
-    "Generation / Synthesis",
-    "Embedding / Representation",
-    "Knowledge Graphs",
-    "Robotics / Embodied AI",
-    "Speech / Audio Processing",
-    "Document Understanding",
-    "Math Reasoning",
-    "Planning / Search",
-    "Multi-agent Systems",
-    "General NLP",
-    "Computer Vision"
-]
-
-DEFAULT_MODALITY_TAGS = [
-    "text",
-    "vision",
-    "video",
-    "audio",
-    "multimodal",
-    "code",
-    "3D"
-]
+# Default taxonomy from curated taxonomy module
+DEFAULT_CONTRIBUTION_TAGS = get_contribution_tags()
+DEFAULT_TASK_TAGS = get_task_tags()
+DEFAULT_MODALITY_TAGS = get_modality_tags()
 
 
 async def call_llm(

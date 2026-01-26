@@ -16,19 +16,27 @@ from pydantic import BaseModel
 from collections import defaultdict
 
 from database import (
-    init_database, 
+    init_database,
     upsert_paper, get_paper, get_all_papers,
     save_taxonomy, get_taxonomy,
     save_paper_tags, get_paper_tags, get_all_paper_tags_for_month,
     get_papers_with_tags_for_month,
+    get_papers_by_date, get_papers_by_date_range,
+    get_upvote_history,
     Paper, Taxonomy, PaperTags
 )
-from scraper import scrape_month, fetch_month_paper_ids, fetch_paper_details
+from scraper import scrape_month, scrape_daily, scrape_date_range, fetch_month_paper_ids, fetch_paper_details
+from aggregation import (
+    compute_daily_stats, compute_weekly_stats, compute_flow_data,
+    compute_trend_data, save_daily_snapshot_for_date,
+    DailyStats, WeeklyStats, FlowData, TrendData
+)
 from llm_tagger import (
     generate_taxonomy, tag_paper, tag_all_papers, tag_paper_heuristic,
     DEFAULT_CONTRIBUTION_TAGS, DEFAULT_TASK_TAGS, DEFAULT_MODALITY_TAGS
 )
 from llm import list_available_providers, get_config, LLMError, ProviderName
+from taxonomy import get_taxonomy_with_colors, get_category_color
 
 
 # Lifespan context manager for startup/shutdown
@@ -707,6 +715,228 @@ async def get_llm_providers():
             }
         }
     }
+
+
+# ============= Taxonomy Endpoints =============
+
+@app.get("/api/taxonomy/curated")
+async def get_curated_taxonomy():
+    """
+    Get the curated taxonomy with stable colors.
+
+    Returns contribution types, task areas, and modalities with their
+    assigned colors for consistent visualization.
+    """
+    return get_taxonomy_with_colors()
+
+
+@app.get("/api/taxonomy/color/{category_name}")
+async def get_taxonomy_color(category_name: str, taxonomy_type: str = "contribution"):
+    """
+    Get the color for a specific category.
+
+    Args:
+        category_name: The category name to look up
+        taxonomy_type: One of 'contribution', 'task', or 'modality'
+    """
+    color = get_category_color(category_name, taxonomy_type)
+    return {"category": category_name, "color": color}
+
+
+# ============= Temporal / Daily Endpoints =============
+
+@app.get("/api/daily/{date}")
+async def get_daily_papers(
+    date: str,
+    cluster: Optional[str] = None,
+    sort_by: str = Query("upvotes", enum=["upvotes", "date", "confidence"]),
+    limit: int = Query(100, le=500)
+):
+    """
+    Get papers for a specific date with optional filtering.
+
+    Args:
+        date: Date in YYYY-MM-DD format
+        cluster: Optional cluster filter
+        sort_by: Sort order
+        limit: Maximum papers to return
+    """
+    papers = await get_papers_by_date(date)
+
+    # TODO: Add filtering and join with tags
+    return {
+        "date": date,
+        "total_papers": len(papers),
+        "papers": [
+            {
+                "id": p.id,
+                "title": p.title,
+                "upvotes": p.upvotes,
+                "appeared_date": p.appeared_date
+            }
+            for p in papers[:limit]
+        ]
+    }
+
+
+@app.get("/api/daily/{date}/stats")
+async def get_daily_statistics(date: str):
+    """
+    Get aggregated statistics for a specific date.
+
+    Args:
+        date: Date in YYYY-MM-DD format
+    """
+    stats = await compute_daily_stats(date)
+    return stats
+
+
+@app.get("/api/weekly/{week_start}/stats")
+async def get_weekly_statistics(week_start: str):
+    """
+    Get aggregated statistics for a week.
+
+    Args:
+        week_start: Start date (Monday) in YYYY-MM-DD format
+    """
+    stats = await compute_weekly_stats(week_start)
+    return stats
+
+
+@app.get("/api/flow")
+async def get_flow_visualization(
+    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date YYYY-MM-DD")
+):
+    """
+    Get flow visualization data showing cluster evolution over time.
+
+    Returns daily cluster counts for creating stream/flow charts.
+    """
+    flow_data = await compute_flow_data(start_date, end_date)
+    return flow_data
+
+
+@app.get("/api/trends/{cluster_name}")
+async def get_cluster_trend(
+    cluster_name: str,
+    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date YYYY-MM-DD")
+):
+    """
+    Get trend data for a specific cluster over time.
+    """
+    trend = await compute_trend_data(cluster_name, start_date, end_date)
+    return trend
+
+
+@app.get("/api/papers/{paper_id}/upvote-history")
+async def get_paper_upvote_history(paper_id: str):
+    """
+    Get upvote history for a paper over time.
+
+    Useful for identifying papers with growing influence.
+    """
+    history = await get_upvote_history(paper_id)
+    return {
+        "paper_id": paper_id,
+        "history": [{"date": h.date, "upvotes": h.upvotes} for h in history]
+    }
+
+
+@app.post("/api/reindex/daily/{date}")
+async def reindex_daily(
+    date: str,
+    background_tasks: BackgroundTasks,
+    use_llm: bool = False,
+    provider: Optional[str] = None
+):
+    """
+    Index papers for a specific date from HF Daily Papers.
+
+    Args:
+        date: Date in YYYY-MM-DD format
+        use_llm: Whether to use LLM for tagging
+        provider: LLM provider to use
+    """
+    task_key = f"daily_{date}"
+
+    if task_key in indexing_status and indexing_status[task_key]["status"] == "running":
+        return IndexStatus(
+            status="already_running",
+            month=date,
+            message="Indexing already in progress for this date"
+        )
+
+    indexing_status[task_key] = {
+        "status": "running",
+        "papers_scraped": 0,
+        "papers_tagged": 0,
+        "message": "Starting..."
+    }
+
+    background_tasks.add_task(run_daily_indexing, date, use_llm, provider)
+
+    return IndexStatus(
+        status="started",
+        month=date,
+        message=f"Daily indexing started for {date}"
+    )
+
+
+async def run_daily_indexing(date: str, use_llm: bool, provider: Optional[str] = None):
+    """Background task to index a single day's papers."""
+    task_key = f"daily_{date}"
+
+    try:
+        # Step 1: Scrape papers for the date
+        indexing_status[task_key]["message"] = f"Scraping papers for {date}..."
+        papers = await scrape_daily(date)
+        indexing_status[task_key]["papers_scraped"] = len(papers)
+
+        # Save papers
+        for paper in papers:
+            await upsert_paper(paper)
+
+        indexing_status[task_key]["message"] = f"Scraped {len(papers)} papers. Tagging..."
+
+        # Step 2: Get or create taxonomy (use month-based for now)
+        month = date[:7]  # YYYY-MM
+        taxonomy = await get_taxonomy(month)
+        if not taxonomy:
+            if use_llm:
+                from llm_tagger import generate_taxonomy
+                taxonomy = await generate_taxonomy(papers, month, provider=provider)
+            else:
+                taxonomy = Taxonomy(
+                    month=month,
+                    contribution_tags=DEFAULT_CONTRIBUTION_TAGS,
+                    task_tags=DEFAULT_TASK_TAGS,
+                    modality_tags=DEFAULT_MODALITY_TAGS,
+                    definitions={}
+                )
+            await save_taxonomy(taxonomy)
+
+        # Step 3: Tag papers
+        from llm_tagger import tag_paper, tag_paper_heuristic
+        for i, paper in enumerate(papers):
+            if use_llm:
+                tags = await tag_paper(paper, taxonomy, provider=provider)
+            else:
+                tags = tag_paper_heuristic(paper, taxonomy)
+
+            await save_paper_tags(tags)
+            indexing_status[task_key]["papers_tagged"] = i + 1
+
+        # Step 4: Save daily snapshot
+        await save_daily_snapshot_for_date(date)
+
+        indexing_status[task_key]["status"] = "completed"
+        indexing_status[task_key]["message"] = f"Successfully indexed {len(papers)} papers for {date}"
+
+    except Exception as e:
+        indexing_status[task_key]["status"] = "failed"
+        indexing_status[task_key]["message"] = str(e)
 
 
 if __name__ == "__main__":

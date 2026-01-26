@@ -1,16 +1,33 @@
 """
 Hugging Face Papers Scraper.
-Fetches papers from HF monthly listing and extracts metadata from paper pages.
+Fetches papers from HF daily and monthly listings and extracts metadata from paper pages.
 """
 
 import httpx
 import re
 import json
+from datetime import date, datetime, timedelta
 from bs4 import BeautifulSoup
 from typing import Optional
 from database import Paper, compute_content_hash
 
 HF_BASE_URL = "https://huggingface.co"
+
+
+def is_weekday(d: date) -> bool:
+    """Check if a date is a weekday (Monday=0 to Friday=4)."""
+    return d.weekday() < 5
+
+
+def get_weekdays_in_range(start_date: date, end_date: date) -> list[date]:
+    """Get all weekdays between start and end date (inclusive)."""
+    days = []
+    current = start_date
+    while current <= end_date:
+        if is_weekday(current):
+            days.append(current)
+        current += timedelta(days=1)
+    return days
 
 
 async def fetch_month_paper_ids(month: str) -> list[str]:
@@ -56,13 +73,56 @@ async def fetch_month_paper_ids(month: str) -> list[str]:
     return paper_ids
 
 
-async def fetch_paper_details(paper_id: str) -> Optional[Paper]:
+async def fetch_daily_paper_ids(date_str: str) -> list[str]:
+    """
+    Fetch all paper IDs from a daily listing page.
+
+    Args:
+        date_str: Date string in format YYYY-MM-DD (e.g., "2025-01-26")
+
+    Returns:
+        List of arxiv paper IDs
+    """
+    url = f"{HF_BASE_URL}/papers?date={date_str}"
+    paper_ids = []
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, follow_redirects=True)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, 'lxml')
+
+        # Find all paper links - they follow pattern /papers/XXXX.XXXXX
+        paper_links = soup.find_all('a', href=re.compile(r'^/papers/\d{4}\.\d{4,5}$'))
+
+        for link in paper_links:
+            href = link.get('href', '')
+            match = re.search(r'/papers/(\d{4}\.\d{4,5})', href)
+            if match:
+                paper_id = match.group(1)
+                if paper_id not in paper_ids:
+                    paper_ids.append(paper_id)
+
+        # Also try to extract from script tags (HF sometimes uses JSON data)
+        scripts = soup.find_all('script')
+        for script in scripts:
+            if script.string and 'papers' in script.string.lower():
+                ids_in_script = re.findall(r'"(\d{4}\.\d{4,5})"', script.string)
+                for pid in ids_in_script:
+                    if pid not in paper_ids:
+                        paper_ids.append(pid)
+
+    return paper_ids
+
+
+async def fetch_paper_details(paper_id: str, appeared_date: Optional[str] = None) -> Optional[Paper]:
     """
     Fetch detailed information for a single paper from its HF page.
-    
+
     Args:
         paper_id: The arxiv ID (e.g., "2512.24880")
-    
+        appeared_date: Optional date when paper appeared on HF Daily Papers (YYYY-MM-DD)
+
     Returns:
         Paper object with all metadata, or None if fetch fails
     """
@@ -177,7 +237,8 @@ async def fetch_paper_details(paper_id: str) -> Optional[Paper]:
             pdf_url=pdf_url,
             upvotes=upvotes,
             authors=authors,
-            content_hash=content_hash
+            content_hash=content_hash,
+            appeared_date=appeared_date
         )
 
 
@@ -209,16 +270,113 @@ async def scrape_month(month: str, progress_callback=None) -> list[Paper]:
     return papers
 
 
+async def scrape_daily(date_str: str, progress_callback=None) -> list[Paper]:
+    """
+    Scrape all papers for a specific date from HF Daily Papers.
+
+    Args:
+        date_str: Date string in format YYYY-MM-DD
+        progress_callback: Optional callback(current, total, paper_id)
+
+    Returns:
+        List of Paper objects
+    """
+    print(f"Fetching paper list for date {date_str}...")
+    paper_ids = await fetch_daily_paper_ids(date_str)
+    print(f"Found {len(paper_ids)} papers")
+
+    papers = []
+    for i, paper_id in enumerate(paper_ids):
+        if progress_callback:
+            progress_callback(i + 1, len(paper_ids), paper_id)
+
+        print(f"Fetching paper {i + 1}/{len(paper_ids)}: {paper_id}")
+        paper = await fetch_paper_details(paper_id, appeared_date=date_str)
+        if paper:
+            papers.append(paper)
+
+    return papers
+
+
+async def scrape_date_range(
+    start_date: str,
+    end_date: str,
+    weekdays_only: bool = True,
+    progress_callback=None
+) -> list[Paper]:
+    """
+    Scrape papers for a range of dates.
+
+    Args:
+        start_date: Start date in format YYYY-MM-DD
+        end_date: End date in format YYYY-MM-DD
+        weekdays_only: If True, only scrape Monday-Friday (default True)
+        progress_callback: Optional callback(date, current, total)
+
+    Returns:
+        List of Paper objects (may contain duplicates across days)
+    """
+    start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+
+    if weekdays_only:
+        dates = get_weekdays_in_range(start, end)
+    else:
+        dates = []
+        current = start
+        while current <= end:
+            dates.append(current)
+            current += timedelta(days=1)
+
+    all_papers = []
+    seen_ids = set()
+
+    for i, d in enumerate(dates):
+        date_str = d.strftime("%Y-%m-%d")
+        print(f"\n=== Scraping {date_str} ({i + 1}/{len(dates)}) ===")
+
+        if progress_callback:
+            progress_callback(date_str, i + 1, len(dates))
+
+        papers = await scrape_daily(date_str)
+
+        # Deduplicate (same paper may appear on multiple days)
+        for paper in papers:
+            if paper.id not in seen_ids:
+                all_papers.append(paper)
+                seen_ids.add(paper.id)
+            else:
+                print(f"  Skipping duplicate: {paper.id}")
+
+    print(f"\nTotal unique papers scraped: {len(all_papers)}")
+    return all_papers
+
+
 # For testing
 if __name__ == "__main__":
     import asyncio
-    
+    import sys
+
     async def main():
-        # Test with a sample month
-        papers = await scrape_month("2025-01")
+        if len(sys.argv) > 1:
+            arg = sys.argv[1]
+            if len(arg) == 10:  # YYYY-MM-DD format
+                print(f"Testing daily scrape for {arg}")
+                papers = await scrape_daily(arg)
+            else:  # YYYY-MM format
+                print(f"Testing monthly scrape for {arg}")
+                papers = await scrape_month(arg)
+        else:
+            # Default: test with today's date
+            today = date.today().strftime("%Y-%m-%d")
+            print(f"Testing daily scrape for {today}")
+            papers = await scrape_daily(today)
+
+        print(f"\nFound {len(papers)} papers:")
         for p in papers[:5]:
-            print(f"\n{p.id}: {p.title[:50]}...")
+            print(f"\n{p.id}: {p.title[:60]}...")
             print(f"  Upvotes: {p.upvotes}")
+            print(f"  Appeared: {p.appeared_date}")
             print(f"  Abstract: {p.abstract[:100]}...")
-    
+
     asyncio.run(main())
